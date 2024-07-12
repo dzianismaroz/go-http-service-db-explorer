@@ -92,10 +92,10 @@ func TestApis(t *testing.T) {
 		panic(err)
 	}
 
-	PrepareTestApis(db)
+	//PrepareTestApis(db)
 
 	// возможно вам будет удобно закомментировать это чтобы смотреть результат после теста
-	defer CleanupTestApis(db)
+	//defer CleanupTestApis(db)
 
 	handler, err := NewDbExplorer(db)
 	if err != nil {
