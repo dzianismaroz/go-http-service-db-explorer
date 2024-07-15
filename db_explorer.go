@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -17,23 +16,15 @@ import (
 // !!!!! Please note that global variables are not allowed in this task.
 
 const (
-	UnknownTableErr         = "unknown table"              // If unknown table was requested.
-	RecordNotFoungErr       = "record not found"           // No entries in table at all or by specified id found.
-	InvalidIDTypeErrParrern = "field %s have invalid type" // Client submited invalid field or type
+	UnknownTableErr         = "unknown table"              // If requested table does not exist in database.
+	RecordNotFoungErr       = "record not found"           // No entries found in table by criteria.
+	InvalidIDTypeErrParrern = "field %s have invalid type" // Cleint submited invalid field for persitence in database.
 )
 
 type Response struct {
-	Err  string      `json:"error,omitempty"`    // any error representation
-	Resp interface{} `json:"response,omitempty"` // any content as response
-}
-
-// !!delete candidate
-type Column struct {
-	Field     string // name of column
-	Type      string
-	Collation string
-	Null      string
-	Key       string
+	status int
+	Err    string      `json:"error,omitempty"`    // any error representation
+	Resp   interface{} `json:"response,omitempty"` // any content as response
 }
 
 type TablesList struct {
@@ -57,22 +48,22 @@ type Req struct {
 	params url.Values
 }
 
-func Resp(content interface{}, e error) Response {
+func Resp(content interface{}, status int, e error) Response {
 	errContent := ""
 	if e != nil {
 		errContent = e.Error()
 	}
-	return Response{Err: errContent, Resp: content}
+	return Response{Err: errContent, status: status, Resp: content}
 }
 
-// Reply with valid json to request.
-func Reply(w http.ResponseWriter, status int, response Response) {
+// Reply on request with valid json.
+func Reply(w http.ResponseWriter, response Response) {
 	respBytes, err := json.Marshal(response)
 	if err != nil {
-		safeWrite(w, status, []byte(fmt.Sprintf("{\"error\":\"%s\"}", err)))
+		safeWrite(w, response.status, []byte(fmt.Sprintf("{\"error\":\"%s\"}", err)))
 		return
 	}
-	safeWrite(w, status, respBytes)
+	safeWrite(w, response.status, respBytes)
 }
 
 func safeWrite(w http.ResponseWriter, statusCode int, content []byte) {
@@ -83,7 +74,7 @@ func safeWrite(w http.ResponseWriter, statusCode int, content []byte) {
 	}
 }
 
-// Collect table metadata: column names and column types to aggign it to DBExplorer.
+// Collect table metadata: column names and column types.
 func (d *DBExplorer) getColumnMetadata(tableName string) error {
 	query := fmt.Sprintf("SELECT * FROM %s LIMIT 1", tableName)
 
@@ -121,7 +112,7 @@ func NewDbExplorer(db *sql.DB) (*DBExplorer, error) {
 	}
 	result.TableNames = TablesList{Tables: tablesNames}
 	for _, tableName := range tablesNames {
-		// collect each table metadata and persist in parent struct
+		// Collect each table metadata and persist in parent struct.
 		err := result.getColumnMetadata(tableName)
 		if err != nil {
 			return nil, err
@@ -133,6 +124,15 @@ func NewDbExplorer(db *sql.DB) (*DBExplorer, error) {
 // Return table names, resolved on initialization. We can suspect it to be static.
 func (d *DBExplorer) ListTables() []string {
 	return d.TableNames.Tables
+}
+
+func (d *DBExplorer) listColumns(tableName string) string {
+	columns := d.metadata[tableName].ColumnNames
+	return strings.Join(columns, ",")
+}
+
+func (d *DBExplorer) countColumns(tableName string) int {
+	return len(d.metadata[tableName].ColumnNames)
 }
 
 // Simple request tracking to StdOut.
@@ -160,14 +160,17 @@ func (d *DBExplorer) route(w http.ResponseWriter, r *http.Request) {
 // ------------------ parse resuqest params ---------------------
 
 func parse(r *http.Request) (presult *Req, err error) {
-	path := r.URL.Path
-	tokens := strings.Split(path, "/")
+	// table, idParam := path.Split(r.URL.Path)
+	p := r.URL.Path
+	tokens := strings.Split(p, "/")[1:]
 	var tableName string
-	var id int64
+	var id int64 = -1
+	fmt.Println("parsing request: tokens len:", len(tokens), "tokens content:", tokens)
 	if len(tokens) > 0 {
 		tableName = tokens[0]
 	}
-	if len(tokens) > 1 {
+	if len(tokens) > 1 && tokens[1] != "" {
+		fmt.Printf("\"%s\"\n", tokens[1])
 		candiate, err := strconv.ParseInt(tokens[1], 10, 64)
 		if err != nil {
 			return nil, err
@@ -178,41 +181,60 @@ func parse(r *http.Request) (presult *Req, err error) {
 	return &Req{table: tableName, id: id, params: r.URL.Query()}, nil
 }
 
-func (r *Req) isTableRequest() bool {
+func (r *Req) isTableListRequest() bool {
 	return r.table == ""
 }
 
-func getId(p string) (int64, bool) {
-	str := path.Base(p)
-	if str == "" {
-		return -1, false
-	}
-	id, err := strconv.ParseInt(str, 10, 64)
-	if err != nil {
-		return -1, false
-	}
-	return id, true
+func (r *Req) isFromTable() bool {
+	return len(r.table) > 1 && r.id < 0
 }
+
+func (r *Req) isById() bool {
+	return r.isFromTable() && r.id > 0
+}
+
+// func getId(p string) (int64, bool) {
+// 	str := path.Base(p)
+// 	if str == "" {
+// 		return -1, false
+// 	}
+// 	id, err := strconv.ParseInt(str, 10, 64)
+// 	if err != nil {
+// 		return -1, false
+// 	}
+// 	return id, true
+// }
 
 // -------------------------------- Handlers --------------------------------------
 func (d *DBExplorer) handleGet(w http.ResponseWriter, r *http.Request) {
 	req, err := parse(r)
 	if err != nil {
-		Reply(w, http.StatusInternalServerError, Resp(nil, err))
+		fmt.Println("error detected while parsing request:", err)
+		Reply(w, Resp(nil, http.StatusInternalServerError, err))
 		return
 	}
+	fmt.Printf("%+v\n", req)
 	// fmt.Printf("path [%s] : %s\n", req., params)
 	// fmt.Println("path", path_, "base", path.Base(path_), "clear", path.Clean(path_))
 	switch {
-	case req.isTableRequest():
-		Reply(w, http.StatusOK, Resp(map[string][]string{"tables": d.ListTables()}, nil))
-	default:
-		status := http.StatusOK
-		result, err := d.query(req)
+	case req.isTableListRequest():
+		Reply(w, Resp(map[string][]string{"tables": d.ListTables()}, http.StatusOK, nil))
+	case req.isFromTable():
+		fmt.Println("requesting from table !, ", req.table)
+		res, err := d.query(req)
 		if err != nil {
-			status = http.StatusInternalServerError
+			Reply(w, Resp(nil, http.StatusNotFound, err))
+			return
 		}
-		Reply(w, status, Resp(result, err))
+		Reply(w, Resp(res, http.StatusOK, nil))
+	case req.isById():
+		_, err := d.queryBy(req.id)
+		if err != nil {
+			Reply(w, Resp(nil, http.StatusNotFound, err))
+			return
+		}
+	default:
+		Reply(w, Resp(nil, http.StatusNotFound, errors.New("no such endpoint")))
 	}
 }
 
@@ -248,7 +270,7 @@ func (e *DBExplorer) findTableNames() []string {
 	}
 }
 
-func (d DBExplorer) FindFrom(params []string) ([]interface{}, error) {
+func (d DBExplorer) FindFrom(params []url.Values) ([]interface{}, error) {
 	switch {
 	case len(params) < 1:
 		return nil, errors.New("invalid")
@@ -256,7 +278,47 @@ func (d DBExplorer) FindFrom(params []string) ([]interface{}, error) {
 	return nil, nil
 }
 
+func (d *DBExplorer) queryBy(id int64) (interface{}, error) {
+	return nil, nil
+}
+
 func (d *DBExplorer) query(r *Req) (result interface{}, err error) {
+	if r.table == "" {
+		return nil, errors.New("bad request")
+	}
+
+	_, ok := d.metadata[r.table]
+	if !ok {
+		return nil, errors.New(UnknownTableErr)
+	}
+
+	if len(r.params) < 1 {
+		columns := d.listColumns(r.table)
+		colsCount := d.countColumns(r.table)
+		sql := fmt.Sprintf("select %s from %s", columns, r.table)
+		fmt.Println("equering:", sql)
+		rows, err := d.db.Query(sql)
+
+		if err != nil {
+			return nil, err
+		}
+
+		for rows.Next() {
+			columns := make([]string, colsCount)
+			columnPtrs := make([]interface{}, colsCount)
+			for i := 0; i < colsCount; i++ {
+				columnPtrs[i] = &columns[i]
+			}
+			// for i := 0; i < len(result); i++ {
+			// rows.Scan()
+			// }
+			err := rows.Scan(columnPtrs...)
+			if err != nil {
+				fmt.Println("error while scanning results:", err)
+			}
+			fmt.Printf("scanned: %+v\n", columns)
+		}
+	}
 	// resolve query type
 	// 1. all ftom table ?
 	// if p == path.Base(p) {
