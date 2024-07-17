@@ -20,7 +20,7 @@ import (
 type CR map[string]interface{}
 
 type Case struct {
-	Method string // GET по-умолчанию в http.NewRequest если передали пустую строку
+	Method string // GET by default in http.NewRequest if an empty string is passed
 	Path   string
 	Query  string
 	Status int
@@ -45,8 +45,8 @@ func PrepareTestApis(db *sql.DB) {
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;`,
 
 		`INSERT INTO items (id, title, description, updated) VALUES
-(1,	'database/sql',	'Рассказать про базы данных',	'rvasily'),
-(2,	'memcache',	'Рассказать про мемкеш с примером использования',	NULL);`,
+(1,	'database/sql',	'Tell us about databases',	'rvasily'),
+(2,	'memcache',	'Tell us about memcache with an example of use',	NULL);`,
 
 		`DROP TABLE IF EXISTS users;`,
 
@@ -92,10 +92,10 @@ func TestApis(t *testing.T) {
 		panic(err)
 	}
 
-	//PrepareTestApis(db)
+	PrepareTestApis(db)
 
-	// возможно вам будет удобно закомментировать это чтобы смотреть результат после теста
-	//defer CleanupTestApis(db)
+	// it might be convenient for you to comment this out so you can see the result after the test
+	defer CleanupTestApis(db)
 
 	handler, err := NewDbExplorer(db)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestApis(t *testing.T) {
 
 	cases := []Case{
 		Case{
-			Path: "/", // список таблиц
+			Path: "/", // list of tables
 			Result: CR{
 				"response": CR{
 					"tables": []string{"items", "users"},
@@ -128,13 +128,13 @@ func TestApis(t *testing.T) {
 						CR{
 							"id":          1,
 							"title":       "database/sql",
-							"description": "Рассказать про базы данных",
+							"description": "Tell us about databases",
 							"updated":     "rvasily",
 						},
 						CR{
 							"id":          2,
 							"title":       "memcache",
-							"description": "Рассказать про мемкеш с примером использования",
+							"description": "Tell us about memcache with an example of use",
 							"updated":     nil,
 						},
 					},
@@ -150,7 +150,7 @@ func TestApis(t *testing.T) {
 						CR{
 							"id":          1,
 							"title":       "database/sql",
-							"description": "Рассказать про базы данных",
+							"description": "Tell us about databases",
 							"updated":     "rvasily",
 						},
 					},
@@ -166,7 +166,7 @@ func TestApis(t *testing.T) {
 						CR{
 							"id":          2,
 							"title":       "memcache",
-							"description": "Рассказать про мемкеш с примером использования",
+							"description": "Tell us about memcache with an example of use",
 							"updated":     nil,
 						},
 					},
@@ -180,7 +180,7 @@ func TestApis(t *testing.T) {
 					"record": CR{
 						"id":          1,
 						"title":       "database/sql",
-						"description": "Рассказать про базы данных",
+						"description": "Tell us about databases",
 						"updated":     "rvasily",
 					},
 				},
@@ -194,12 +194,12 @@ func TestApis(t *testing.T) {
 			},
 		},
 
-		// тут идёт создание и редактирование
+		// here comes creation and editing
 		Case{
 			Path:   "/items/",
 			Method: http.MethodPut,
 			Body: CR{
-				"id":          42, // auto increment primary key игнорируется при вставке
+				"id":          42, // auto increment primary key is ignored when inserting
 				"title":       "db_crud",
 				"description": "",
 			},
@@ -209,9 +209,9 @@ func TestApis(t *testing.T) {
 				},
 			},
 		},
-		// это пример хрупкого теста
-		// если много раз вызывать один и тот же тест - записи будут добавляться
-		// поэтому придётся сделать сброс базы каждый раз в PrepareTestData
+		// this is an example of a fragile test
+		// if you call the same test many times, records will be added
+		// so you have to reset the database every time in PrepareTestData
 		Case{
 			Path: "/items/3",
 			Result: CR{
@@ -229,7 +229,7 @@ func TestApis(t *testing.T) {
 			Path:   "/items/3",
 			Method: http.MethodPost,
 			Body: CR{
-				"description": "Написать программу db_crud",
+				"description": "Write the db_crud program",
 			},
 			Result: CR{
 				"response": CR{
@@ -244,14 +244,14 @@ func TestApis(t *testing.T) {
 					"record": CR{
 						"id":          3,
 						"title":       "db_crud",
-						"description": "Написать программу db_crud",
+						"description": "Write the db_crud program",
 						"updated":     nil,
 					},
 				},
 			},
 		},
 
-		// обновление null-поля в таблице
+		// update a null field in the table
 		Case{
 			Path:   "/items/3",
 			Method: http.MethodPost,
@@ -271,14 +271,14 @@ func TestApis(t *testing.T) {
 					"record": CR{
 						"id":          3,
 						"title":       "db_crud",
-						"description": "Написать программу db_crud",
+						"description": "Write the db_crud program",
 						"updated":     "autotests",
 					},
 				},
 			},
 		},
 
-		// обновление null-поля в таблице
+		// update a null field in the table
 		Case{
 			Path:   "/items/3",
 			Method: http.MethodPost,
@@ -298,20 +298,20 @@ func TestApis(t *testing.T) {
 					"record": CR{
 						"id":          3,
 						"title":       "db_crud",
-						"description": "Написать программу db_crud",
+						"description": "Write the db_crud program",
 						"updated":     nil,
 					},
 				},
 			},
 		},
 
-		// ошибки
+		// errors
 		Case{
 			Path:   "/items/3",
 			Method: http.MethodPost,
 			Status: http.StatusBadRequest,
 			Body: CR{
-				"id": 4, // primary key нельзя обновлять у существующей записи
+				"id": 4, // primary key cannot be updated for an existing record
 			},
 			Result: CR{
 				"error": "field id have invalid type",
@@ -352,7 +352,7 @@ func TestApis(t *testing.T) {
 			},
 		},
 
-		// удаление
+		// delete
 		Case{
 			Path:   "/items/3",
 			Method: http.MethodDelete,
@@ -379,7 +379,7 @@ func TestApis(t *testing.T) {
 			},
 		},
 
-		// и немного по другой таблице
+		// and a little according to another table
 		Case{
 			Path: "/users/1",
 			Result: CR{
@@ -424,19 +424,19 @@ func TestApis(t *testing.T) {
 				},
 			},
 		},
-		// ошибки
+		// errors
 		Case{
 			Path:   "/users/1",
 			Method: http.MethodPost,
 			Status: http.StatusBadRequest,
 			Body: CR{
-				"user_id": 1, // primary key нельзя обновлять у существующей записи
+				"user_id": 1, // primary key cannot be updated for an existing record
 			},
 			Result: CR{
 				"error": "field user_id have invalid type",
 			},
 		},
-		// не забываем про sql-инъекции
+		// don't forget about sql injections
 		Case{
 			Path:   "/users/",
 			Method: http.MethodPut,
@@ -467,8 +467,8 @@ func TestApis(t *testing.T) {
 				},
 			},
 		},
-		// тут тоже возможна sql-инъекция
-		// если пришло не число на вход - берём дефолтное значене для лимита-оффсета
+		// SQL injection is also possible here
+		// if the input number is not a number, take the default value for the offset limit
 		Case{
 			Path:  "/users",
 			Query: "limit=1'&offset=1\"",
@@ -511,8 +511,8 @@ func runCases(t *testing.T, ts *httptest.Server, db *sql.DB, cases []Case) {
 
 		caseName := fmt.Sprintf("case %d: [%s] %s %s", idx, item.Method, item.Path, item.Query)
 
-		// если у вас случилась это ошибка - значит вы не делаете где-то rows.Close и у вас текут соединения с базой
-		// если такое случилось на первом тесте - значит вы не закрываете коннект где-то при иницаилизации в NewDbExplorer
+		// if you get this error, it means you are not doing rows.Close somewhere and your connections to the database are leaking
+		// if this happened in the first test, it means you did not close the connection somewhere during initialization in NewDbExplorer
 		if db.Stats().OpenConnections != 1 {
 			t.Fatalf("[%s] you have %d open connections, must be 1", caseName, db.Stats().OpenConnections)
 		}
@@ -537,7 +537,6 @@ func runCases(t *testing.T, ts *httptest.Server, db *sql.DB, cases []Case) {
 		defer resp.Body.Close()
 		body, err := ioutil.ReadAll(resp.Body)
 
-		// fmt.Printf("[%s] body: %s\n", caseName, string(body))
 		if item.Status == 0 {
 			item.Status = http.StatusOK
 		}
@@ -553,10 +552,10 @@ func runCases(t *testing.T, ts *httptest.Server, db *sql.DB, cases []Case) {
 			continue
 		}
 
-		// reflect.DeepEqual не работает если нам приходят разные типы
-		// а там приходят разные типы (string VS interface{}) по сравнению с тем что в ожидаемом результате
-		// этот маленький грязный хак конвертит данные сначала в json, а потом обратно в interface - получаем совместимые результаты
-		// не используйте это в продакшен-коде - надо явно писать что ожидается интерфейс или использовать другой подход с точным форматом ответа
+		// reflect.DeepEqual does not work if we receive different types
+		// and there they come with different types (string VS interface{}) compared to what is in the expected result
+		// this dirty little hack converts data first to json and then back to interface - getting compatible results
+		// do not use this in production code - you must explicitly write what the interface is expected or use another approach with the exact response format
 		data, err := json.Marshal(item.Result)
 		json.Unmarshal(data, &expected)
 

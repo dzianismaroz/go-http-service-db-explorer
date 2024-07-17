@@ -15,8 +15,8 @@ CREATE TABLE `items` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 INSERT INTO `items` (`id`, `title`, `description`, `updated`) VALUES
-(1,	'database/sql',	'Рассказать про базы данных',	'rvasily'),
-(2,	'memcache',	'Рассказать про мемкеш с примером использования',	NULL);
+(1,	'database/sql',	'Tell us about databases',	'rvasily'),
+(2,	'memcache',	'Tell us about memcache with an example of use',	NULL);
 
 DROP TABLE IF EXISTS `users`;
 CREATE TABLE `users` (

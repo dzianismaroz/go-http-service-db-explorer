@@ -1,5 +1,5 @@
-// тут лежит тестовый код
-// менять вам может потребоваться только коннект к базе
+// here is the test code
+// you may only need to change the connection to the database
 package main
 
 import (
@@ -20,7 +20,7 @@ var (
 
 func main() {
 	db, err := sql.Open("mysql", DSN)
-	err = db.Ping() // вот тут будет первое подключение к базе
+	err = db.Ping() // here will be the first connection to the database
 	if err != nil {
 		panic(err)
 	}
