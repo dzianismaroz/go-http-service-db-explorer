@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -18,69 +17,34 @@ import (
 // !!!!! Please note that global variables are not allowed in this task.
 
 const (
+	// ------------------ DB QUERIES ------------------------------
+	showTablesQuery = "SHOW TABLES;"
+	selectByIdQuery = "select %s from %s WHERE %s = ?"
+	selectQuery     = "select %s from %s LIMIT ? OFFSET ?"
+	insertQuery     = "INSERT INTO %s(%s) VALUES(%s)"
+	updateQuery     = "UPDATE  `%s` SET %s WHERE `%s` = ?"
+	deleteQuery     = "DELETE FROM `%s` WHERE `%s` = ?"
+	// ------------------ errors ----------------------------------
 	UnknownTableErr         = "unknown table"              // If requested table does not exist in database.
 	RecordNotFoungErr       = "record not found"           // No entries found in table by criteria.
 	InvalidIDTypeErrParrern = "field %s have invalid type" // Cleint submited invalid field for persitence in database.
 	BadRequest              = "BAD_REQUEST"
-	defaultLimit            = 5
-	defaultOffest           = 0
+	//-------------------------------------------------------------
+	defaultLimit  = 5
+	defaultOffest = 0
 )
 
-type DBEntry = map[string]interface{}
-
-type DBEntries = []DBEntry
-
-type Response struct {
-	status int
-	Err    string      `json:"error,omitempty"`    // any error representation
-	Resp   interface{} `json:"response,omitempty"` // any content as response
-}
-
-type TablesList struct {
-	Tables []string `json:"tables"`
-}
-
-type ColumnMetadata struct {
-	FieldName       string // Name of column
-	IsNumericType   bool   // Is it a numeric type
-	IsNullable      bool
-	IsAutoIncrement bool
-}
-
-type TableMetadata struct {
-	ColumnsInfo []ColumnMetadata
-	ColumnNames []string
-	hash        map[string]ColumnMetadata
-}
-
-type RowResult struct {
-	metadata TableMetadata
-	entries  DBEntries
-}
+type (
+	DBEntry     = map[string]interface{}
+	HTTPStatus  = int
+	DBEntries   = []DBEntry
+	RequestBody = map[string]interface{}
+)
 
 type DBExplorer struct {
-	db         *sql.DB // database handler
-	TableNames TablesList
-	metadata   map[string]TableMetadata
-}
-
-type Req struct {
-	table  string
-	id     int
-	params url.Values
-}
-
-// Internal function to build Column Info based on attributes from database.
-func newColumnInfo(fieldName, fType, extra, null string) ColumnMetadata {
-	return ColumnMetadata{
-		FieldName:       fieldName,
-		IsNumericType:   strings.Contains(fType, "int"),
-		IsNullable:      null == "YES",
-		IsAutoIncrement: strings.Contains(extra, "increment")}
-}
-
-func (t TableMetadata) getColumn(name string) ColumnMetadata {
-	return t.hash[name]
+	db         *sql.DB                  // database handler
+	TableNames TablesList               // Keep table names after instantiating.
+	metadata   map[string]TableMetadata // Keep metadate per table after instantiating.
 }
 
 func Resp(content interface{}, status int, e error) Response {
@@ -89,99 +53,6 @@ func Resp(content interface{}, status int, e error) Response {
 		errContent = e.Error()
 	}
 	return Response{Err: errContent, status: status, Resp: content}
-}
-
-// Reply on request with valid json.
-func Reply(w http.ResponseWriter, response Response) {
-	respBytes, err := json.Marshal(response)
-	if err != nil {
-		safeWrite(w, response.status, []byte(fmt.Sprintf("{\"error\":\"%s\"}", err)))
-		return
-	}
-	safeWrite(w, response.status, respBytes)
-}
-
-func safeWrite(w http.ResponseWriter, statusCode int, content []byte) {
-	w.WriteHeader(statusCode)
-	_, err := w.Write(content)
-	if err != nil {
-		http.Error(w, "unexpected error", http.StatusInternalServerError)
-	}
-}
-
-func NewRowResult(metadata TableMetadata) *RowResult {
-	return &RowResult{metadata: metadata, entries: make(DBEntries, 0, 20)}
-}
-
-func (r *RowResult) handleSingle(row *sql.Row) (interface{}, error) {
-	colsCount := len(r.metadata.ColumnsInfo)
-	columnVals := make([]interface{}, colsCount)
-	for i := 0; i < colsCount; i++ {
-		columnVals[i] = &columnVals[i]
-	}
-	err := row.Scan(columnVals...)
-	if err != nil {
-		fmt.Println("hahahahahahah", err)
-		return nil, errors.New("record not found")
-	}
-	fmt.Printf("scanned: %+s\n", columnVals)
-	entry := make(DBEntry, 1)
-	for i := 0; i < colsCount; i++ {
-		fmt.Printf("col val %T\n", columnVals[i])
-		switch {
-		case columnVals[i] == nil:
-			entry[r.metadata.ColumnNames[i]] = nil
-		default:
-			if r.metadata.ColumnsInfo[i].IsNumericType {
-				intVal, _ := columnVals[i].(int64)
-				entry[r.metadata.ColumnNames[i]] = intVal
-			} else {
-				entry[r.metadata.ColumnNames[i]] = string(columnVals[i].([]byte))
-			}
-		}
-	}
-	result := map[string]DBEntry{"record": entry}
-	return result, nil
-}
-
-func (r *RowResult) handleResult(rows *sql.Rows) {
-	colsCount := len(r.metadata.ColumnNames)
-	columnVals := make([]interface{}, colsCount)
-
-	for rows.Next() {
-		for i := 0; i < colsCount; i++ {
-			columnVals[i] = &columnVals[i]
-		}
-		err := rows.Scan(columnVals...)
-		if err != nil {
-			fmt.Println("error while scanning results:", err)
-		}
-		fmt.Printf("scanned: %+s\n", columnVals)
-		entry := make(DBEntry, 1)
-		for i := 0; i < colsCount; i++ {
-			switch {
-			case columnVals[i] == nil:
-				entry[r.metadata.ColumnNames[i]] = nil
-			default:
-				if r.metadata.ColumnsInfo[i].IsNumericType {
-					intVal, _ := columnVals[i].(int64)
-					entry[r.metadata.ColumnNames[i]] = intVal
-				} else {
-					entry[r.metadata.ColumnNames[i]] = string(columnVals[i].([]byte))
-				}
-			}
-		}
-		jsonString, _ := json.Marshal(entry)
-		fmt.Printf("entries extracted: %s\n", entry)
-		for k, v := range entry {
-			fmt.Printf("for %s we have value %s of type %+T\n", k, v, v)
-		}
-		fmt.Printf("entries extracted: %s\n", jsonString)
-		r.entries = append(r.entries, entry)
-	}
-	jsonString, err := json.Marshal(r.entries)
-	fmt.Println(err)
-	fmt.Printf("entries extracted: %s\n", jsonString)
 }
 
 // Collect table metadata: column names and column types.
@@ -201,46 +72,52 @@ func (d *DBExplorer) getColumnMetadata(tableName string) error {
 		)
 		err := rows.Scan(&field, &tType, &collation, &tNull, &key, &tDefault, &tExtra, &privileges, &comment)
 		if err != nil {
-			fmt.Println("error while scanning row to value-holders:", err)
+			return err
 		}
 		columnsInfo = append(columnsInfo, newColumnInfo(field, tType, tExtra, tNull))
 	}
-	fmt.Printf("^^^^ WE GOT: %#v\n", &columnsInfo)
 	columnNames := make([]string, len(columnsInfo))
 	for i := 0; i < len(columnsInfo); i++ {
-		columnNames[i] = columnsInfo[i].FieldName
+		columnNames[i] = columnsInfo[i].fieldName
 	}
 	hash := make(map[string]ColumnMetadata, len(columnsInfo))
 	for i := 0; i < len(columnsInfo); i++ {
-		hash[columnsInfo[i].FieldName] = columnsInfo[i]
+		hash[columnsInfo[i].fieldName] = columnsInfo[i]
 	}
-	tableMetadata := TableMetadata{ColumnsInfo: columnsInfo, ColumnNames: columnNames, hash: hash}
+	tableMetadata := TableMetadata{columnsInfo: columnsInfo, columnNames: columnNames, hash: hash}
 	d.metadata[tableName] = tableMetadata
 	return nil
 }
 
+// Create new DB Explorer instance to handle DB-queries and http-requests
 func NewDbExplorer(db *sql.DB) (*DBExplorer, error) {
+	// Adjust default settings of DB-connection
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(2)
-	db.SetConnMaxIdleTime(2 * time.Second)
+	db.SetConnMaxIdleTime(1 * time.Second)
 	// Just verify db connection once again. `who knows....`
 	if connErr := db.Ping(); connErr != nil {
 		return nil, connErr
 	}
-	result := &DBExplorer{db: db, metadata: make(map[string]TableMetadata, 10)}
-	tablesNames := result.findTableNames()
+
+	dbExplorer := &DBExplorer{db: db, metadata: make(map[string]TableMetadata, 10)}
+	return dbExplorer.collectMetaInfo()
+}
+
+func (d *DBExplorer) collectMetaInfo() (*DBExplorer, error) {
+	tablesNames := d.findTableNames()
 	if len(tablesNames) < 1 {
 		return nil, errors.New("no tables in database")
 	}
-	result.TableNames = TablesList{Tables: tablesNames}
+	d.TableNames = TablesList{Tables: tablesNames}
 	for _, tableName := range tablesNames {
 		// Collect each table metadata and persist in parent struct.
-		err := result.getColumnMetadata(tableName)
+		err := d.getColumnMetadata(tableName)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return result, nil
+	return d, nil
 }
 
 // Return table names, resolved on initialization. We can suspect it to be static.
@@ -249,15 +126,15 @@ func (d *DBExplorer) ListTables() []string {
 }
 
 func (d *DBExplorer) listColumns(tableName string) string {
-	columns := d.metadata[tableName].ColumnNames
+	columns := d.metadata[tableName].columnNames
 	return strings.Join(columns, ",")
 }
 
 func (d *DBExplorer) getIdColumn(tableName string) string {
-	columnsInfo := d.metadata[tableName].ColumnsInfo
+	columnsInfo := d.metadata[tableName].columnsInfo
 	for i := 0; i < len(columnsInfo); i++ {
-		if columnsInfo[i].IsAutoIncrement {
-			return columnsInfo[i].FieldName
+		if columnsInfo[i].isAutoIncrement {
+			return columnsInfo[i].fieldName
 		}
 	}
 	return "" // No candidate for id found among columns ?
@@ -266,7 +143,6 @@ func (d *DBExplorer) getUpdatePlaceholders(req *Req, entity DBEntry) (placeholde
 	columnNames := d.collectInsertColumns(req.table)
 	values = make([]interface{}, 0, len(columnNames))
 	filtered := make([]string, 0, len(columnNames))
-	fmt.Printf("req body: %+v\n", entity)
 	for i := 0; i < len(columnNames); i++ {
 		if _, presented := entity[columnNames[i]]; !presented {
 			continue
@@ -278,18 +154,17 @@ func (d *DBExplorer) getUpdatePlaceholders(req *Req, entity DBEntry) (placeholde
 		return BadRequest, nil
 	}
 	placeholders = "`" + strings.Join(filtered, "` = ?, `") + "` = ?"
-	fmt.Println("placeholders:", placeholders, "values", values)
 	return
 }
 
 func (d *DBExplorer) collectInsertColumns(tableName string) []string {
-	columns := d.metadata[tableName].ColumnsInfo
+	columns := d.metadata[tableName].columnsInfo
 	filtered := make([]string, 0, len(columns)-1)
 	for i := 0; i < len(columns); i++ {
-		if columns[i].IsAutoIncrement {
+		if columns[i].isAutoIncrement {
 			continue
 		}
-		filtered = append(filtered, columns[i].FieldName)
+		filtered = append(filtered, columns[i].fieldName)
 	}
 	return filtered
 }
@@ -298,50 +173,45 @@ func (d *DBExplorer) listInsertColumns(tableName string) string {
 	return strings.Join(d.collectInsertColumns(tableName), ",")
 }
 
-func (d *DBExplorer) listUpdateColumns(tableName string) string {
-	return d.listInsertColumns(tableName)
-}
-
-func (d *DBExplorer) countColumns(tableName string) int {
-	return len(d.metadata[tableName].ColumnNames)
-}
-
 // Simple request tracking to StdOut.
 func (d *DBExplorer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf(":::: %s [%s] : %s {%#v}\n", time.Now().Format(time.DateTime), r.Method, r.URL.Path, r.URL.Query())
+	// Usefull http requests tracking [-> 2024-07-17 17:58:29 [GET] : /users/1 {url.Values{}}]
+	fmt.Printf("-> %s [%s] : %s {%#v}\n", time.Now().Format(time.DateTime), r.Method, r.URL.Path, r.URL.Query())
 	d.route(w, r)
 }
 
 // -------------------------------- Router   --------------------------------------
 func (d *DBExplorer) route(w http.ResponseWriter, r *http.Request) {
+	requestedData, err := parse(r, d.metadata)
+	if err != nil {
+		reply(w, Resp(nil, http.StatusInternalServerError, err))
+		return
+	}
 	switch r.Method {
-	case http.MethodGet:
-		d.handleGet(w, r)
-	case http.MethodPost:
-		d.handlePost(w, r)
-	case http.MethodPut:
-		d.handlePut(w, r)
-	case http.MethodDelete:
-		d.handleDelete(w, r)
-	default:
+	case http.MethodGet: // Query results by predicate from database.
+		d.handleGet(w, requestedData)
+	case http.MethodPost: // Upate existing entry in database.
+		d.handlePost(w, requestedData)
+	case http.MethodPut: // Create new entry in database.
+		d.handlePut(w, requestedData)
+	case http.MethodDelete: // Delete entry by id provided in url path.
+		d.handleDelete(w, requestedData)
+	default: // Invalid API usage by client.
 		http.Error(w, "invalid request", http.StatusNotFound)
 	}
 }
 
-// ------------------ parse resuqest params ---------------------
+// ------------------ parse request params ---------------------
 
-func parse(r *http.Request) (presult *Req, err error) {
-	// table, idParam := path.Split(r.URL.Path)
+func parse(r *http.Request, tableMetadataMap map[string]TableMetadata) (presult *Req, err error) {
 	p := r.URL.Path
 	tokens := strings.Split(p, "/")[1:]
 	var tableName string
 	var id int = -1
-	fmt.Println("parsing request: tokens len:", len(tokens), "tokens content:", tokens)
 	if len(tokens) > 0 {
 		tableName = tokens[0]
 	}
 	if len(tokens) > 1 && tokens[1] != "" {
-		fmt.Printf("\"%s\"\n", tokens[1])
 		candiate, err := strconv.Atoi(tokens[1])
 		if err != nil {
 			return nil, err
@@ -349,174 +219,149 @@ func parse(r *http.Request) (presult *Req, err error) {
 		id = candiate
 	}
 
-	return &Req{table: tableName, id: id, params: r.URL.Query()}, nil
-}
-
-func (r *Req) isTableListRequest() bool {
-	return r.table == ""
-}
-
-func (r *Req) isFromTable() bool {
-	return len(r.table) > 1 && r.id < 0
-}
-
-func (r *Req) isById() bool {
-	return len(r.table) > 1 && r.id > 0
+	return &Req{
+		table:  tableName,
+		id:     id,
+		params: r.URL.Query(),
+		body:   extractRequestBody(r, tableMetadataMap[tableName].columnsInfo),
+	}, nil
 }
 
 // -------------------------------- Handlers --------------------------------------
-func (d *DBExplorer) handleGet(w http.ResponseWriter, r *http.Request) {
-	req, err := parse(r)
-	if err != nil {
-		fmt.Println("error detected while parsing request:", err)
-		Reply(w, Resp(nil, http.StatusInternalServerError, err))
-		return
-	}
-	fmt.Printf("%+v\n", req)
-	// fmt.Printf("path [%s] : %s\n", req., params)
-	// fmt.Println("path", path_, "base", path.Base(path_), "clear", path.Clean(path_))
+// Only query for some data from database: list of table names / content of specified table.
+func (d *DBExplorer) handleGet(w http.ResponseWriter, requestedData *Req) {
+	var resp Response = Resp(nil, http.StatusNotFound, errors.New("no such endpoint"))
 	switch {
-	case req.isTableListRequest():
-		Reply(w, Resp(map[string][]string{"tables": d.ListTables()}, http.StatusOK, nil))
-	case req.isFromTable():
-		fmt.Println("requesting from table !, ", req.table)
-		res, err := d.query(req)
+	// We need to provide only list of table names.
+	case requestedData.isTableNamesQuery():
+		resp = Resp(map[string][]string{"tables": d.ListTables()}, http.StatusOK, nil)
+	// we need to reply on multi-row query to database.
+	case requestedData.isTableEntriesQuery():
+		res, err := d.query(requestedData)
 		if err != nil {
-			Reply(w, Resp(nil, http.StatusNotFound, err))
-			return
+			resp = Resp(nil, http.StatusNotFound, err)
+			break
 		}
-		Reply(w, Resp(res, http.StatusOK, nil))
-	case req.isById():
-		result, err := d.queryBy(req)
+		resp = Resp(res, http.StatusOK, nil)
+	// Only single row was requested by id.
+	case requestedData.isByIdQuery():
+		result, err := d.queryBy(requestedData)
 		if err != nil {
-			Reply(w, Resp(nil, http.StatusNotFound, err))
-			return
+			resp = Resp(nil, http.StatusNotFound, err)
+			break
 		}
-		Reply(w, Resp(result, http.StatusOK, nil))
-	default:
-		Reply(w, Resp(nil, http.StatusNotFound, errors.New("no such endpoint")))
+		resp = Resp(result, http.StatusOK, nil)
 	}
+	reply(w, resp)
 }
 
-func (d *DBExplorer) handlePost(w http.ResponseWriter, r *http.Request) {
-	req, err := parse(r)
+func (d *DBExplorer) handlePost(w http.ResponseWriter, requestedData *Req) {
+	result, err := d.update(requestedData)
 	if err != nil {
-		fmt.Println("error detected while parsing request:", err)
-		Reply(w, Resp(nil, http.StatusInternalServerError, err))
-		return
+		reply(w, Resp(nil, http.StatusBadRequest, err))
+		return // Failed to query DB.
 	}
-	tableMetadata, ok := d.metadata[req.table]
-	if !ok {
-		http.Error(w, UnknownTableErr, http.StatusInternalServerError)
-		return
-	}
-	requestBody, err := extractRequestBody(r, tableMetadata.ColumnsInfo)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	result, err := d.update(req, requestBody)
-	if err != nil {
-		fmt.Println("&&& WE got problem on persist:", err)
-		Reply(w, Resp(nil, http.StatusBadRequest, err))
-		return
-	}
-	Reply(w, Resp(result, http.StatusOK, nil))
+	reply(w, Resp(result, http.StatusOK, nil)) // Success on DB query.
 }
 
-func extractRequestBody(r *http.Request, columnsInfo []ColumnMetadata) (map[string]interface{}, error) {
+func extractRequestBody(r *http.Request, columnsInfo []ColumnMetadata) RequestBody {
+	if r.Method == http.MethodGet || r.Method == http.MethodDelete {
+		return nil
+	}
+	rawBodyBytes, err := io.ReadAll(r.Body)
 	defer closeResources(r.Body)
-	bytedata, err := io.ReadAll(r.Body)
 	if err != nil {
-		fmt.Println("error reading request body:", err)
-		return nil, err
+		return nil
 	}
-	temp := make(map[string]interface{})
+	temp := make(RequestBody) // Preliminary uhnmarshall of request body for further filtering and casting.
 
-	if err := json.Unmarshal(bytedata, &temp); err != nil {
-		fmt.Println("error unmarshalling request body:", err)
-		return nil, err
+	if err := json.Unmarshal(rawBodyBytes, &temp); err != nil {
+		return nil
 	}
-	fmt.Printf("we got raw request body %s\n", bytedata)
-	result := make(map[string]interface{})
-	var columnInfo ColumnMetadata
+	var colName string
+	// Filter unknown attributes and make explicit casting. Use known columns metadata.
 	for i := 0; i < len(columnsInfo); i++ {
-		columnInfo = columnsInfo[i]
-		val, presented := temp[columnInfo.FieldName]
-		if !presented {
+		colName = columnsInfo[i].fieldName
+		if val, presented := temp[colName]; !presented {
+			delete(temp, colName)
 			continue
+		} else {
+			// Explicit cast to numeric.
+			if columnsInfo[i].isNumericType {
+				temp[colName] = int(val.(float64))
+				continue
+			}
 		}
-
-		if columnInfo.IsNumericType {
-			result[columnInfo.FieldName] = int(val.(float64))
-			continue
-		}
-		result[columnInfo.FieldName] = val
 	}
-	return result, nil
+	return temp
 }
 
-func (d *DBExplorer) handlePut(w http.ResponseWriter, r *http.Request) {
-	req, err := parse(r)
+func (d *DBExplorer) handlePut(w http.ResponseWriter, requestedData *Req) {
+	result, err := d.insert(requestedData)
 	if err != nil {
-		fmt.Println("error detected while parsing request:", err)
-		Reply(w, Resp(nil, http.StatusInternalServerError, err))
+		reply(w, Resp(nil, http.StatusNotFound, err))
 		return
 	}
-	tableMetadata, ok := d.metadata[req.table]
-	if !ok {
-		http.Error(w, UnknownTableErr, http.StatusInternalServerError)
-		return
-	}
-	fmt.Printf("%+v\n", req)
-
-	requestBody, err := extractRequestBody(r, tableMetadata.ColumnsInfo)
-	if err != nil {
-		http.Error(w, "unable to parse json", http.StatusInternalServerError)
-		return
-	}
-	result, err := d.insert(req, requestBody)
-	if err != nil {
-		fmt.Println("&&& WE got problem on persist:", err)
-		Reply(w, Resp(nil, http.StatusNotFound, err))
-		return
-	}
-	Reply(w, Resp(result, http.StatusOK, nil))
-	// 1 . extract request body and validate
-	// 2. try to insert
-	// 3. handle errors
-	// 4. response
+	reply(w, Resp(result, http.StatusOK, nil))
 }
 
-func (d *DBExplorer) handleDelete(w http.ResponseWriter, r *http.Request) {
-	req, err := parse(r)
-	if err != nil {
-		fmt.Println("error detected while parsing request:", err)
-		Reply(w, Resp(nil, http.StatusInternalServerError, err))
-		return
+func (d *DBExplorer) handleDelete(w http.ResponseWriter, requestedData *Req) {
+	if result, err := d.delete(requestedData); err != nil {
+		reply(w, Resp(nil, http.StatusNotFound, err))
+	} else {
+		reply(w, Resp(result, http.StatusOK, nil))
 	}
-	result, err := d.delete(req)
-	if err != nil {
-		fmt.Println("&&& WE got problem on persist:", err)
-		Reply(w, Resp(nil, http.StatusNotFound, err))
-		return
-	}
-	Reply(w, Resp(result, http.StatusOK, nil))
 }
 
-// ---------------------------- DB executors ------------------
+// ---------------------------- ------------------
 
 func closeResources(closer io.Closer) {
+
 	err := closer.Close()
 	if err != nil {
 		log.Fatal("unable to close rows")
 	}
 }
 
-func (e *DBExplorer) findTableNames() []string {
+func validate(entity DBEntry, columnsInfo []ColumnMetadata) error {
+	for i := 0; i < len(columnsInfo); i++ {
+		if val, presented := entity[columnsInfo[i].fieldName]; !presented {
+			continue
+		} else {
+			var failed bool
+			if columnsInfo[i].isAutoIncrement {
+				failed = true
+			}
+			if !columnsInfo[i].isNullable && val == nil {
+				failed = true
+			}
 
-	rows, err := e.db.Query("SHOW TABLES;")
+			isNumeric := columnsInfo[i].isNumericType
+			if val != nil {
+				switch val.(type) {
+				case string:
+					if isNumeric {
+						failed = true
+					}
+				default:
+					if !isNumeric {
+						failed = true
+					}
+				}
+			}
+
+			if failed {
+				return fmt.Errorf("field %s have invalid type", columnsInfo[i].fieldName)
+			}
+		}
+	}
+	return nil
+}
+
+// ---------------------- Database operations ---------------------------
+
+func (e *DBExplorer) findTableNames() []string {
+	rows, err := e.db.Query(showTablesQuery)
 	defer closeResources(rows)
 	if err != nil {
 		return nil
@@ -525,31 +370,22 @@ func (e *DBExplorer) findTableNames() []string {
 	tablesNames := make([]string, 0, 10)
 	var tableName string
 	for rows.Next() {
-
 		if err := rows.Scan(&tableName); err != nil {
 			return nil
-		} else {
-			tablesNames = append(tablesNames, tableName)
 		}
+		tablesNames = append(tablesNames, tableName)
 	}
 	return tablesNames
 
 }
 
-func (d DBExplorer) FindFrom(params []url.Values) ([]interface{}, error) {
-	switch {
-	case len(params) < 1:
-		return nil, errors.New("invalid")
-	}
-	return nil, nil
-}
-
+// Perform delete from database by ID specified in http path.
 func (d *DBExplorer) delete(req *Req) (interface{}, error) {
 	if _, ok := d.metadata[req.table]; !ok {
 		return nil, errors.New(UnknownTableErr)
 	}
 	idColumn := d.getIdColumn(req.table)
-	sql := fmt.Sprintf("DELETE FROM `%s` WHERE `%s` = ?", req.table, idColumn)
+	sql := fmt.Sprintf(deleteQuery, req.table, idColumn)
 
 	result, err := d.db.Exec(sql, req.id)
 	if err != nil {
@@ -562,7 +398,8 @@ func (d *DBExplorer) delete(req *Req) (interface{}, error) {
 	return map[string]interface{}{"deleted": lastID}, nil
 }
 
-func (d *DBExplorer) insert(req *Req, entity DBEntry) (interface{}, error) {
+func (d *DBExplorer) insert(req *Req) (interface{}, error) {
+	entity := req.body
 	tableMetadata, ok := d.metadata[req.table]
 	if !ok {
 		return nil, errors.New(UnknownTableErr)
@@ -571,15 +408,14 @@ func (d *DBExplorer) insert(req *Req, entity DBEntry) (interface{}, error) {
 	columns := d.collectInsertColumns(req.table)
 	columnsCount := len(columns)
 	placeholders := strings.Join(strings.Split(strings.Repeat("?", columnsCount), ""), ",")
-	sql := fmt.Sprintf("INSERT INTO %s(%s) VALUES(%s)", req.table, d.listInsertColumns(req.table), placeholders)
-	fmt.Println("raw sql on insert:", sql)
+	sql := fmt.Sprintf(insertQuery, req.table, d.listInsertColumns(req.table), placeholders)
 	values := make([]interface{}, columnsCount)
 	for i := 0; i < columnsCount; i++ {
 		values[i] = entity[columns[i]]
 		if values[i] == nil {
 			colInfo := tableMetadata.getColumn(columns[i])
-			if !colInfo.IsNullable {
-				if colInfo.IsNumericType {
+			if !colInfo.isNullable {
+				if colInfo.isNumericType {
 					values[i] = 0
 				} else {
 					values[i] = ""
@@ -598,47 +434,13 @@ func (d *DBExplorer) insert(req *Req, entity DBEntry) (interface{}, error) {
 	return map[string]interface{}{idColumn: lastID}, nil
 }
 
-func validate(entity DBEntry, columnsInfo []ColumnMetadata) error {
-	for i := 0; i < len(columnsInfo); i++ {
-		if val, presented := entity[columnsInfo[i].FieldName]; !presented {
-			continue
-		} else {
-			var failed bool
-			if columnsInfo[i].IsAutoIncrement {
-				failed = true
-			}
-			if !columnsInfo[i].IsNullable && val == nil {
-				failed = true
-			}
-
-			isNumeric := columnsInfo[i].IsNumericType
-			if val != nil {
-				switch val.(type) {
-				case string:
-					if isNumeric {
-						failed = true
-					}
-				default:
-					if !isNumeric {
-						failed = true
-					}
-				}
-			}
-
-			if failed {
-				return fmt.Errorf("field %s have invalid type", columnsInfo[i].FieldName)
-			}
-		}
-	}
-	return nil
-}
-
-func (d *DBExplorer) update(req *Req, entity DBEntry) (interface{}, error) {
+func (d *DBExplorer) update(req *Req) (interface{}, error) {
+	entity := req.body
 	tableMetadata, ok := d.metadata[req.table]
-	if !ok {
+	if !ok || entity == nil {
 		return nil, errors.New(UnknownTableErr)
 	}
-	if hasError := validate(entity, tableMetadata.ColumnsInfo); hasError != nil {
+	if hasError := validate(entity, tableMetadata.columnsInfo); hasError != nil {
 		return nil, hasError
 	}
 	idValue := req.id
@@ -649,8 +451,7 @@ func (d *DBExplorer) update(req *Req, entity DBEntry) (interface{}, error) {
 	if updatePlaceholders == BadRequest {
 		return nil, errors.New("bad request")
 	}
-	sql := fmt.Sprintf("UPDATE  `%s` SET %s WHERE `%s` = ?", req.table, updatePlaceholders, idColumn)
-	fmt.Println("POST YUPDATE : ", sql)
+	sql := fmt.Sprintf(updateQuery, req.table, updatePlaceholders, idColumn)
 	values := make([]interface{}, columnsCount)
 	for i := 0; i < columnsCount; i++ {
 		values[i] = entity[columns[i]]
@@ -667,9 +468,7 @@ func (d *DBExplorer) update(req *Req, entity DBEntry) (interface{}, error) {
 	return map[string]interface{}{"updated": lastID}, nil
 }
 
-// /update
 func (d *DBExplorer) queryBy(r *Req) (interface{}, error) {
-	fmt.Println("##### query by ID !~")
 	if r.table == "" {
 		return nil, errors.New("bad request")
 	}
@@ -679,24 +478,20 @@ func (d *DBExplorer) queryBy(r *Req) (interface{}, error) {
 		return nil, errors.New(UnknownTableErr)
 	}
 	columns := d.listColumns(r.table)
-	sql := fmt.Sprintf("select %s from %s WHERE %s = ?", columns, r.table, tableMetadata.ColumnNames[0])
+	sql := fmt.Sprintf(selectByIdQuery, columns, r.table, tableMetadata.columnNames[0])
 	row := d.db.QueryRow(sql, r.id)
-	rowResult := NewRowResult(tableMetadata)
-	return rowResult.handleSingle(row)
+	rowResult := newRowResult(tableMetadata)
+	return rowResult.handleSingleRowResult(row)
 }
 
 func (d *DBExplorer) query(r *Req) (result interface{}, err error) {
-	if r.table == "" {
-		return nil, errors.New("bad request")
-	}
-	tableMetadata, ok := d.metadata[r.table]
-	if !ok {
+
+	tableMetadata, known := d.metadata[r.table] // Should be ok, cause table is known.
+	if !known {
 		return nil, errors.New(UnknownTableErr)
 	}
-	columns := d.listColumns(r.table)
-	sql := fmt.Sprintf("select %s from %s LIMIT ? OFFSET ?", columns, r.table)
-	limit := defaultLimit
-	offset := defaultOffest
+	sql := fmt.Sprintf(selectQuery, d.listColumns(r.table), r.table)
+	limit, offset := defaultLimit, defaultOffest
 	if len(r.params) > 0 {
 		if tempLimit, err := strconv.Atoi(r.params.Get("limit")); err == nil {
 			limit = tempLimit
@@ -708,11 +503,10 @@ func (d *DBExplorer) query(r *Req) (result interface{}, err error) {
 
 	rows, err := d.db.Query(sql, limit, offset)
 	defer closeResources(rows)
-
 	if err != nil {
 		return nil, err
 	}
-	rowResult := NewRowResult(tableMetadata)
-	rowResult.handleResult(rows)
-	return map[string]interface{}{"records": rowResult.entries}, nil
+	rowResult := newRowResult(tableMetadata)
+	err = rowResult.handleMultiRowResult(rows)
+	return map[string]interface{}{"records": rowResult.entries}, err
 }

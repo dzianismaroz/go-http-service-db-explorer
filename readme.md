@@ -1,3 +1,11 @@
+```
+Solution:
+go test -v -race
+=== RUN   TestApis
+--- PASS: TestApis (0.18s)
+PASS
+ok      db_explorer     1.186s
+```
 db_explorer program
 
 This simple web service will be a MySQL database manager that allows CRUD queries (create, read, update, delete) to it via HTTP
